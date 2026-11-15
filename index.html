@@ -159,7 +159,7 @@ const part = s => ({inlineData:{mimeType:s.slice(5,s.indexOf(";")),data:s.split(
 // ---------- Cervello ----------
 const sys = () => `Sei "Cover Buddy", un amico simpatico e scherzoso, esperto di copertine (thumbnail) per video YouTube. Rispondi in modo breve e veloce.
 TONO: copia il registro dell'utente. Se è informale, sii informale. Se è arrabbiato o usa parolacce, rispondi anche tu arrabbiato-scherzoso con qualche parolaccia leggera, senza esagerare e senza offendere nessuno sul serio. Se è serio, sii più serio. Rispondi nella sua lingua.
-COPERTINE: quando l'utente vuole una copertina, scrivi una riga amichevole e poi, su una riga a parte, [[IMG: prompt dettagliato in inglese per una thumbnail YouTube 16:9, coerente con lo stile salvato e con le foto allegate come riferimento]]. Mai più di una immagine per volta.
+COPERTINE: quando l'utente vuole una copertina, scrivi una riga amichevole e poi, su una riga a parte, [[IMG: prompt in inglese]]. Il generatore di immagini parte SOLO dal testo e non può usare le foto allegate né riprodurre volti: quindi descrivi sfondo, oggetti, colori, luci ed emozione, tieni il soggetto principale nella fascia centrale, lascia uno spazio libero a sinistra o a destra dove l'utente aggiungerà la propria faccia, e usa al massimo 3 parole di testo grande e leggibile. Il prompt deve essere descrittivo (almeno 40 parole), in formato 16:9 per YouTube, e rispettare lo stile salvato. Mai più di una immagine per volta.
 ${style
  ? `STILE SALVATO (rispettalo sempre, NON rifare domande sullo stile): ${style}\nSolo se l'utente chiede esplicitamente di cambiare stile, fai le domande necessarie e salva il nuovo stile.`
  : `NESSUNO STILE SALVATO: alla prima richiesta di copertina NON generare subito. Chiedi che stile vuole e fatti spiegare tutto in modo super dettagliato (colori, font, testi, espressioni del viso, sfondo, mood, canali di esempio, ecc.). Se ha dubbi o domande, rispondi con pazienza e dagli esempi. Quando hai tutto, riassumi lo stile e chiedi conferma.`}
@@ -196,19 +196,29 @@ async function submit(text){
   voice = false; save();
 }
 
+const crop169 = src => new Promise(ok => {
+  const im = new Image();
+  im.onload = () => {
+    const w = im.width, h = Math.round(w*9/16);
+    if (im.height <= h) return ok(src);
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    c.getContext("2d").drawImage(im,0,(im.height-h)/2,w,h,0,0,w,h); ok(c.toDataURL("image/png"));
+  };
+  im.onerror = () => ok(src); im.src = src;
+});
+
 async function makeImage(prompt){
   const w = add({role:"model",text:"Sto disegnando la copertina… 🎨"});
   try {
-    const refs = [...cur.msgs].reverse().find(m => m.role==="user" && m.imgs?.length)?.imgs || [];
-    const j = await call("image",{contents:[{role:"user",parts:[
-      {text:`Create a YouTube thumbnail, landscape 16:9 (1280x720), high quality, bold and readable. Follow this saved style strictly: ${style}\nRequest: ${prompt}`},
-      ...refs.map(part)]}],generationConfig:{responseModalities:["TEXT","IMAGE"]}});
-    const imgs = (j.candidates?.[0]?.content?.parts||[]).filter(p => p.inlineData)
+    const full = `${prompt}\n\nStyle guidelines: ${style}`.slice(0,1900);
+    const j = await call("image",{prompt:full});
+    const raw = (j.candidates?.[0]?.content?.parts||[]).filter(p => p.inlineData)
       .map(p => `data:${p.inlineData.mimeType};base64,${p.inlineData.data}`);
+    if (!raw.length) throw new Error("nessuna immagine ricevuta");
+    const imgs = await Promise.all(raw.map(crop169));
     w.remove();
-    if (!imgs.length) throw new Error("il modello non ha restituito nessuna immagine");
     cur.msgs.push({role:"model",text:"Ecco qua! Dimmi se vuoi ritocchi 🔥",imgs}); add(cur.msgs.at(-1));
-  } catch(e){ w.remove(); add({role:"model",text:"Non sono riuscito a creare l'immagine: "+e.message+"\n(Se parla di quota o limite, il piano gratuito non include questo modello: cambia IMAGE_MODEL nel Worker.)"}); }
+  } catch(e){ w.remove(); add({role:"model",text:"Non sono riuscito a creare l'immagine: "+e.message}); }
 }
 
 // ---------- Voce ----------
